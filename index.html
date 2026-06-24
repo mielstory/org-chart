@@ -63,6 +63,7 @@
   .btn:hover{background:#f0f2f4;}
   .btn-primary{background:var(--accent); color:#fff; border-color:var(--accent);}
   .btn-primary:hover{filter:brightness(0.94);}
+  .btn.active{background:var(--accent); color:#fff; border-color:var(--accent);}
   .btn-icon{border:none; background:none; color:#b0b6bf; cursor:pointer; font-size:16px; padding:4px;}
   .btn-icon:hover{color:var(--danger);}
   .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
@@ -97,9 +98,10 @@
       <thead>
         <tr>
           <th class="col-handle"></th>
-          <th style="width:30%;">名前</th>
-          <th style="width:30%;">役職</th>
-          <th style="width:34%;">上司</th>
+          <th style="width:26%;">名前</th>
+          <th style="width:24%;">役職</th>
+          <th style="width:26%;">上司</th>
+          <th style="width:120px;">段 <span style="font-weight:400; color:var(--muted);">（任意）</span></th>
           <th class="col-del"></th>
         </tr>
       </thead>
@@ -116,7 +118,7 @@
       <button class="btn" id="loadFileBtn">📂 ファイルを読み込む</button>
       <input type="file" id="fileInput" accept=".csv,.json,text/csv,application/json" style="display:none" />
     </div>
-    <p class="note">「上司」を選ぶと自動でつながります。一番上の人は上司を「（トップ）」のままにしてください。入力は自動保存され、同じブラウザなら次回も続きから編集できます。<br>別の端末に移したり手元に残すときは「保存（CSV）」でファイル化し、次回「ファイルを読み込む」で復元してください。CSVはExcel・スプレッドシートでもそのまま開けます。</p>
+    <p class="note">「上司」を選ぶと自動でつながります。一番上の人は上司を「（トップ）」のままにしてください。入力は自動保存され、同じブラウザなら次回も続きから編集できます。<br>別の端末に移したり手元に残すときは「保存（CSV）」でファイル化し、次回「ファイルを読み込む」で復元してください。CSVはExcel・スプレッドシートでもそのまま開けます。<br>「段」列は空欄のままでOK（役職名から自動で段を判定します）。下の表示モードを「役職レベルで段を揃える」にすると、部長・課長などが同じ高さに並びます。揃え方を直したい人だけ「段」を選んでください。</p>
     <p class="warn" id="warn"></p>
   </section>
 
@@ -128,6 +130,11 @@
         <button class="btn" id="pngBtn">画像で保存（PNG）</button>
         <button class="btn" id="printBtn">印刷 / PDF</button>
       </div>
+    </div>
+    <div class="toolbar" style="margin-top:10px;">
+      <span style="font-size:12px; color:var(--muted); align-self:center;">表示モード：</span>
+      <button class="btn" id="modeReportBtn">レポートライン基準</button>
+      <button class="btn" id="modeRoleBtn">役職レベルで段を揃える</button>
     </div>
     <div id="chartArea" style="margin-top:12px;">
       <svg id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -171,7 +178,7 @@ function load(){
 function loadSample(){
   people = [];
   const byName = {};
-  SAMPLE.forEach(s => { const p = {id: uid++, name:s.name, title:s.title, mgrId:null}; byName[s.name]=p; people.push(p); });
+  SAMPLE.forEach(s => { const p = {id: uid++, name:s.name, title:s.title, mgrId:null, level:null}; byName[s.name]=p; people.push(p); });
   SAMPLE.forEach(s => { if(s.mgr) byName[s.name].mgrId = byName[s.mgr].id; });
 }
 
@@ -204,6 +211,20 @@ function renderRows(){
     sel.addEventListener("change", () => { p.mgrId = sel.value ? Number(sel.value) : null; save(); renderChart(); });
     tdMgr.appendChild(sel); tr.appendChild(tdMgr);
 
+    const tdLevel = document.createElement("td");
+    const lvSel = document.createElement("select");
+    const optAuto = document.createElement("option");
+    optAuto.value = ""; optAuto.textContent = "自動";
+    lvSel.appendChild(optAuto);
+    for(let L = 1; L <= 6; L++){
+      const o = document.createElement("option");
+      o.value = String(L); o.textContent = L + "：" + levelName(L);
+      lvSel.appendChild(o);
+    }
+    lvSel.value = (p.level == null) ? "" : String(p.level);
+    lvSel.addEventListener("change", () => { p.level = lvSel.value === "" ? null : Number(lvSel.value); save(); renderChart(); });
+    tdLevel.appendChild(lvSel); tr.appendChild(tdLevel);
+
     const tdDel = document.createElement("td");
     tdDel.className = "col-del";
     const del = document.createElement("button");
@@ -220,9 +241,10 @@ function renderRows(){
   refreshSelects();
 }
 
-/* 上司ドロップダウンの中身を最新の名前リストで更新（自分自身は除外） */
+/* 上司ドロップダウンの中身を最新の名前リストで更新（自分自身は除外）。
+   data-pid を持つ「上司」セレクトだけが対象（「段」セレクトは対象外） */
 function refreshSelects(){
-  document.querySelectorAll('#rows select').forEach(sel => {
+  document.querySelectorAll('#rows select[data-pid]').forEach(sel => {
     const pid = Number(sel.dataset.pid);
     const cur = people.find(p => p.id === pid);
     sel.innerHTML = "";
@@ -238,6 +260,27 @@ function refreshSelects(){
     });
     sel.value = cur && cur.mgrId ? String(cur.mgrId) : "";
   });
+}
+
+/* ---------- 表示モード・役職レベル ---------- */
+const MODE_KEY = "orgchart.mode.v1";
+const LEVEL_NAMES = {1:"役員", 2:"部長", 3:"課長", 4:"担当", 5:"第5段", 6:"第6段"};
+let mode = "report";
+function roleLevel(t){
+  t = t || "";
+  if(/代表|社長|会長|役員|取締役|CEO|COO|CTO|CFO/.test(t)) return 1;
+  if(/本部長|部長|次長/.test(t)) return 2;
+  if(/課長|係長|マネージャ/.test(t)) return 3;
+  return 4;
+}
+function levelOf(n){ return (n.level != null && n.level !== "") ? Number(n.level) : roleLevel(n.title); }
+function levelName(L){ return LEVEL_NAMES[L] || ("第" + L + "段"); }
+function loadMode(){ try{ const m = localStorage.getItem(MODE_KEY); if(m === "role" || m === "report") mode = m; }catch(e){} }
+function setMode(m){ mode = m; try{ localStorage.setItem(MODE_KEY, m); }catch(e){} updateModeButtons(); renderChart(); }
+function updateModeButtons(){
+  const r = $("modeReportBtn"), o = $("modeRoleBtn");
+  if(r) r.classList.toggle("active", mode === "report");
+  if(o) o.classList.toggle("active", mode === "role");
 }
 
 /* ---------- 組織図の構築・レイアウト ---------- */
@@ -259,13 +302,14 @@ function buildForest(){
 }
 
 function layout(roots){
-  let cursor = 0, maxDepth = 0;
+  let cursor = 0, maxRow = 0;
   const seen = new Set();
   function assign(n, depth){
     if(seen.has(n.id)) return;   /* 循環ガード */
     seen.add(n.id);
-    if(depth > maxDepth) maxDepth = depth;
-    n.y = depth * (NH + VGAP);
+    const row = (mode === "role") ? Math.max(0, levelOf(n) - 1) : depth;
+    if(row > maxRow) maxRow = row;
+    n.y = row * (NH + VGAP);
     if(n.children.length === 0){ n.x = cursor; cursor += NW + HGAP; }
     else{
       n.children.forEach(c => assign(c, depth+1));
@@ -273,7 +317,7 @@ function layout(roots){
     }
   }
   roots.forEach(r => assign(r, 0));
-  return { w: Math.max(cursor - HGAP, NW), h: (maxDepth+1) * (NH + VGAP) - VGAP };
+  return { w: Math.max(cursor - HGAP, NW), h: (maxRow+1) * (NH + VGAP) - VGAP };
 }
 
 const SVGNS = "http://www.w3.org/2000/svg";
@@ -298,7 +342,9 @@ function renderChart(){
   }
 
   const dim = layout(roots);
-  const W = dim.w + PAD*2, H = dim.h + PAD*2;
+  const LBL = (mode === "role") ? 58 : 0;
+  const OX = PAD + LBL;
+  const W = dim.w + PAD*2 + LBL, H = dim.h + PAD*2;
   chart.setAttribute("viewBox", `0 0 ${W} ${H}`);
   chart.setAttribute("width", W);
   chart.setAttribute("height", H);
@@ -306,12 +352,24 @@ function renderChart(){
   const bg = svgEl("rect",{x:0,y:0,width:W,height:H,fill:"#ffffff"});
   chart.appendChild(bg);
 
-  /* つなぎ線 */
+  /* 段ラベル（役職レベル表示のとき、左端に役員/部長/課長…を表示） */
+  if(mode === "role"){
+    const levels = new Set();
+    eachNode(roots, n => levels.add(levelOf(n)));
+    [...levels].sort((a,b) => a-b).forEach(L => {
+      const cy = (L-1) * (NH + VGAP) + PAD + NH/2;
+      const t = svgEl("text",{x: OX - 14, y: cy + 4, "text-anchor":"end", fill:"#9aa0a8", "font-size":12, "font-family":"sans-serif"});
+      t.textContent = levelName(L);
+      chart.appendChild(t);
+    });
+  }
+
+  /* つなぎ線（上司の直下で分岐し、各部下の段まで縦に伸ばす） */
   eachNode(roots, n => {
     if(n.children.length){
-      const pcx = n.x + NW/2 + PAD, pb = n.y + NH + PAD, midY = n.y + NH + VGAP/2 + PAD;
+      const pcx = n.x + NW/2 + OX, pb = n.y + NH + PAD, midY = n.y + NH + VGAP/2 + PAD;
       n.children.forEach(c => {
-        const ccx = c.x + NW/2 + PAD;
+        const ccx = c.x + NW/2 + OX;
         chart.appendChild(svgEl("path",{d:`M ${pcx} ${pb} V ${midY} H ${ccx} V ${c.y+PAD}`,fill:"none",stroke:"#c7ccd3","stroke-width":1.6}));
       });
     }
@@ -319,7 +377,7 @@ function renderChart(){
 
   /* ノード */
   eachNode(roots, n => {
-    const x = n.x + PAD, y = n.y + PAD;
+    const x = n.x + OX, y = n.y + PAD;
     chart.appendChild(svgEl("rect",{x,y,width:NW,height:NH,rx:9,
       fill: n.isRoot ? "var(--accent-weak)" : "#ffffff",
       stroke: n.isRoot ? "#1d9e75" : "#d6dbe1",
@@ -374,8 +432,8 @@ function csvEscape(v){
   return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
 }
 function toCsv(){
-  const rows = [["名前","役職","上司"]];
-  people.forEach(p => { if((p.name||"").trim() !== "") rows.push([p.name, p.title, mgrNameOf(p)]); });
+  const rows = [["名前","役職","上司","段"]];
+  people.forEach(p => { if((p.name||"").trim() !== "") rows.push([p.name, p.title, mgrNameOf(p), (p.level == null || p.level === "") ? "" : String(p.level)]); });
   return "﻿" + rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
 }
 function download(filename, text, mime){
@@ -415,10 +473,14 @@ function fromCsv(text){
   for(let r = start; r < rows.length; r++){
     const name = (rows[r][0] || "").trim();
     if(!name) continue;
-    list.push({name, title:(rows[r][1] || "").trim(), mgrName:(rows[r][2] || "").trim()});
+    list.push({name, title:(rows[r][1] || "").trim(), mgrName:(rows[r][2] || "").trim(), level:(rows[r][3] || "").trim()});
   }
   const result = []; let id = 1; const byName = {};
-  list.forEach(o => { const p = {id: id++, name:o.name, title:o.title, mgrId:null}; result.push(p); if(!byName[o.name]) byName[o.name] = p; });
+  list.forEach(o => {
+    const lv = (o.level === "" || isNaN(Number(o.level))) ? null : Number(o.level);
+    const p = {id: id++, name:o.name, title:o.title, mgrId:null, level:lv};
+    result.push(p); if(!byName[o.name]) byName[o.name] = p;
+  });
   list.forEach((o, idx) => { if(o.mgrName && byName[o.mgrName] && byName[o.mgrName] !== result[idx]) result[idx].mgrId = byName[o.mgrName].id; });
   return result;
 }
@@ -432,7 +494,7 @@ function importFile(file){
         const obj = JSON.parse(text);
         loaded = Array.isArray(obj) ? obj : obj.people;
         if(!Array.isArray(loaded)) throw new Error("組織図データの形式ではありません");
-        loaded = loaded.map(p => ({id: Number(p.id), name: String(p.name||""), title: String(p.title||""), mgrId: (p.mgrId == null ? null : Number(p.mgrId))}));
+        loaded = loaded.map(p => ({id: Number(p.id), name: String(p.name||""), title: String(p.title||""), mgrId: (p.mgrId == null ? null : Number(p.mgrId)), level: (p.level == null || p.level === "") ? null : Number(p.level)}));
       } else {
         loaded = fromCsv(text);
       }
@@ -446,7 +508,7 @@ function importFile(file){
 }
 
 /* ---------- 起動・イベント ---------- */
-function addPerson(){ people.push({id: uid++, name:"", title:"", mgrId:null}); save(); renderRows(); renderChart(); }
+function addPerson(){ people.push({id: uid++, name:"", title:"", mgrId:null, level:null}); save(); renderRows(); renderChart(); }
 
 $("addBtn").addEventListener("click", addPerson);
 $("sampleBtn").addEventListener("click", () => { loadSample(); save(); renderRows(); renderChart(); });
@@ -466,7 +528,12 @@ $("fileInput").addEventListener("change", (e) => {
   importFile(f);
 });
 
+$("modeReportBtn").addEventListener("click", () => setMode("report"));
+$("modeRoleBtn").addEventListener("click", () => setMode("role"));
+
+loadMode();
 if(!load()){ loadSample(); save(); }
+updateModeButtons();
 renderRows();
 renderChart();
 </script>
