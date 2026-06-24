@@ -110,7 +110,13 @@
       <button class="btn" id="sampleBtn">サンプルを読み込む</button>
       <button class="btn" id="clearBtn">すべて消す</button>
     </div>
-    <p class="note">「上司」を選ぶと自動でつながります。一番上の人は上司を「（トップ）」のままにしてください。入力は自動保存されます。</p>
+    <div class="toolbar">
+      <button class="btn" id="saveCsvBtn">💾 保存（CSV）</button>
+      <button class="btn" id="saveJsonBtn">保存（JSON・完全）</button>
+      <button class="btn" id="loadFileBtn">📂 ファイルを読み込む</button>
+      <input type="file" id="fileInput" accept=".csv,.json,text/csv,application/json" style="display:none" />
+    </div>
+    <p class="note">「上司」を選ぶと自動でつながります。一番上の人は上司を「（トップ）」のままにしてください。入力は自動保存され、同じブラウザなら次回も続きから編集できます。<br>別の端末に移したり手元に残すときは「保存（CSV）」でファイル化し、次回「ファイルを読み込む」で復元してください。CSVはExcel・スプレッドシートでもそのまま開けます。</p>
     <p class="warn" id="warn"></p>
   </section>
 
@@ -357,6 +363,88 @@ function exportPng(){
   img.src = svg64;
 }
 
+/* ---------- ファイル保存・読込（CSV / JSON） ---------- */
+function mgrNameOf(p){
+  if(!p.mgrId) return "";
+  const m = people.find(x => x.id === p.mgrId);
+  return m ? m.name : "";
+}
+function csvEscape(v){
+  v = (v == null) ? "" : String(v);
+  return /[",\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+}
+function toCsv(){
+  const rows = [["名前","役職","上司"]];
+  people.forEach(p => { if((p.name||"").trim() !== "") rows.push([p.name, p.title, mgrNameOf(p)]); });
+  return "﻿" + rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
+}
+function download(filename, text, mime){
+  const blob = new Blob([text], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function exportCsv(){ download("組織図データ.csv", toCsv(), "text/csv;charset=utf-8"); }
+function exportJson(){ download("組織図データ.json", JSON.stringify({version:1, people}, null, 2), "application/json"); }
+
+function parseCsv(text){
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const rows = []; let cur = [], field = "", inQ = false, i = 0;
+  while(i < text.length){
+    const c = text[i];
+    if(inQ){
+      if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i += 2; continue; } inQ = false; i++; continue; }
+      field += c; i++; continue;
+    }
+    if(c === '"'){ inQ = true; i++; continue; }
+    if(c === ','){ cur.push(field); field = ""; i++; continue; }
+    if(c === '\r'){ i++; continue; }
+    if(c === '\n'){ cur.push(field); rows.push(cur); cur = []; field = ""; i++; continue; }
+    field += c; i++;
+  }
+  if(field !== "" || cur.length){ cur.push(field); rows.push(cur); }
+  return rows.filter(r => r.some(x => String(x).trim() !== ""));
+}
+function fromCsv(text){
+  const rows = parseCsv(text);
+  if(!rows.length) return [];
+  const h0 = (rows[0][0] || "").trim();
+  const start = (h0 === "名前" || h0.toLowerCase() === "name") ? 1 : 0;
+  const list = [];
+  for(let r = start; r < rows.length; r++){
+    const name = (rows[r][0] || "").trim();
+    if(!name) continue;
+    list.push({name, title:(rows[r][1] || "").trim(), mgrName:(rows[r][2] || "").trim()});
+  }
+  const result = []; let id = 1; const byName = {};
+  list.forEach(o => { const p = {id: id++, name:o.name, title:o.title, mgrId:null}; result.push(p); if(!byName[o.name]) byName[o.name] = p; });
+  list.forEach((o, idx) => { if(o.mgrName && byName[o.mgrName] && byName[o.mgrName] !== result[idx]) result[idx].mgrId = byName[o.mgrName].id; });
+  return result;
+}
+function importFile(file){
+  const reader = new FileReader();
+  reader.onload = () => {
+    try{
+      const text = String(reader.result);
+      let loaded;
+      if(/\.json$/i.test(file.name) || text.trim().charAt(0) === "{"){
+        const obj = JSON.parse(text);
+        loaded = Array.isArray(obj) ? obj : obj.people;
+        if(!Array.isArray(loaded)) throw new Error("組織図データの形式ではありません");
+        loaded = loaded.map(p => ({id: Number(p.id), name: String(p.name||""), title: String(p.title||""), mgrId: (p.mgrId == null ? null : Number(p.mgrId))}));
+      } else {
+        loaded = fromCsv(text);
+      }
+      if(!loaded.length) throw new Error("読み取れるデータがありませんでした");
+      people = loaded;
+      uid = people.reduce((m, p) => Math.max(m, p.id || 0), 0) + 1;
+      save(); renderRows(); renderChart();
+    }catch(e){ alert("読み込みに失敗しました：" + e.message); }
+  };
+  reader.readAsText(file);
+}
+
 /* ---------- 起動・イベント ---------- */
 function addPerson(){ people.push({id: uid++, name:"", title:"", mgrId:null}); save(); renderRows(); renderChart(); }
 
@@ -367,6 +455,16 @@ $("clearBtn").addEventListener("click", () => {
 });
 $("pngBtn").addEventListener("click", exportPng);
 $("printBtn").addEventListener("click", () => window.print());
+$("saveCsvBtn").addEventListener("click", exportCsv);
+$("saveJsonBtn").addEventListener("click", exportJson);
+$("loadFileBtn").addEventListener("click", () => $("fileInput").click());
+$("fileInput").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  e.target.value = "";
+  if(!f) return;
+  if(people.some(p => (p.name||"").trim() !== "") && !confirm("現在の入力を、読み込むファイルの内容で置き換えます。よろしいですか？")) return;
+  importFile(f);
+});
 
 if(!load()){ loadSample(); save(); }
 renderRows();
