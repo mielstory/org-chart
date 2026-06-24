@@ -64,6 +64,8 @@
   .btn-primary{background:var(--accent); color:#fff; border-color:var(--accent);}
   .btn-primary:hover{filter:brightness(0.94);}
   .btn.active{background:var(--accent); color:#fff; border-color:var(--accent);}
+  details > summary{list-style:none;}
+  details > summary::-webkit-details-marker{display:none;}
   .btn-icon{border:none; background:none; color:#b0b6bf; cursor:pointer; font-size:16px; padding:4px;}
   .btn-icon:hover{color:var(--danger);}
   .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
@@ -122,6 +124,31 @@
     <p class="warn" id="warn"></p>
   </section>
 
+  <!-- ===== 段（役職の格）の設定パネル ===== -->
+  <details class="panel">
+    <summary style="cursor:pointer; font-size:14px; font-weight:600;">
+      <span class="num" style="display:inline-flex; vertical-align:middle; margin-right:8px;">★</span>段（役職の格）の設定 <span style="font-weight:400; color:var(--muted);">— ふつうは触らなくてOK。会社の役職体系に合わせたいとき開いてください</span>
+    </summary>
+    <div style="margin-top:14px;">
+      <table class="input">
+        <thead>
+          <tr>
+            <th style="width:64px;">並び</th>
+            <th style="width:28%;">段の名前（上が上位）</th>
+            <th>この段に入る役職名キーワード（カンマ区切り）</th>
+            <th class="col-del"></th>
+          </tr>
+        </thead>
+        <tbody id="rankRows"></tbody>
+      </table>
+      <div class="toolbar">
+        <button class="btn" id="addRankBtn">＋ 段を追加</button>
+        <button class="btn" id="resetRankBtn">初期設定に戻す</button>
+      </div>
+      <p class="note">上から順に上位の段です。役職名がキーワードを含むと、上の段から優先して自動でその段に入ります。例：「課長」段のキーワードに「リーダー」を入れておくと、◯◯リーダーは課長と同じ段に並びます。各メンバーの「段」を手動で選べば、自動判定より優先されます。</p>
+    </div>
+  </details>
+
   <!-- ===== 組織図パネル ===== -->
   <section class="panel">
     <div class="panel-head">
@@ -171,14 +198,19 @@ function save(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(people)); }
 function load(){
   try{
     const raw = localStorage.getItem(STORE_KEY);
-    if(raw){ people = JSON.parse(raw); uid = people.reduce((m,p)=>Math.max(m,p.id),0)+1; return true; }
+    if(raw){
+      people = JSON.parse(raw);
+      people.forEach(p => { if(p.rankId === undefined){ p.rankId = (p.level != null) ? resolveRankId(String(p.level)) : null; } });
+      uid = people.reduce((m,p)=>Math.max(m,p.id),0)+1;
+      return true;
+    }
   }catch(e){}
   return false;
 }
 function loadSample(){
   people = [];
   const byName = {};
-  SAMPLE.forEach(s => { const p = {id: uid++, name:s.name, title:s.title, mgrId:null, level:null}; byName[s.name]=p; people.push(p); });
+  SAMPLE.forEach(s => { const p = {id: uid++, name:s.name, title:s.title, mgrId:null, rankId:null}; byName[s.name]=p; people.push(p); });
   SAMPLE.forEach(s => { if(s.mgr) byName[s.name].mgrId = byName[s.mgr].id; });
 }
 
@@ -213,16 +245,17 @@ function renderRows(){
 
     const tdLevel = document.createElement("td");
     const lvSel = document.createElement("select");
+    lvSel.className = "rank-select";
     const optAuto = document.createElement("option");
     optAuto.value = ""; optAuto.textContent = "自動";
     lvSel.appendChild(optAuto);
-    for(let L = 1; L <= 6; L++){
+    ranks.forEach(r => {
       const o = document.createElement("option");
-      o.value = String(L); o.textContent = L + "：" + levelName(L);
+      o.value = String(r.id); o.textContent = r.name;
       lvSel.appendChild(o);
-    }
-    lvSel.value = (p.level == null) ? "" : String(p.level);
-    lvSel.addEventListener("change", () => { p.level = lvSel.value === "" ? null : Number(lvSel.value); save(); renderChart(); });
+    });
+    lvSel.value = (p.rankId == null) ? "" : String(p.rankId);
+    lvSel.addEventListener("change", () => { p.rankId = lvSel.value === "" ? null : Number(lvSel.value); save(); renderChart(); });
     tdLevel.appendChild(lvSel); tr.appendChild(tdLevel);
 
     const tdDel = document.createElement("td");
@@ -262,25 +295,128 @@ function refreshSelects(){
   });
 }
 
-/* ---------- 表示モード・役職レベル ---------- */
-const MODE_KEY = "orgchart.mode.v1";
-const LEVEL_NAMES = {1:"役員", 2:"部長", 3:"課長", 4:"担当", 5:"第5段", 6:"第6段"};
-let mode = "report";
-function roleLevel(t){
-  t = t || "";
-  if(/代表|社長|会長|役員|取締役|CEO|COO|CTO|CFO/.test(t)) return 1;
-  if(/本部長|部長|次長/.test(t)) return 2;
-  if(/課長|係長|マネージャ/.test(t)) return 3;
-  return 4;
+/* ---------- 段（役職の格）設定の描画・編集 ---------- */
+function renderRanks(){
+  const tbody = $("rankRows");
+  if(!tbody) return;
+  tbody.innerHTML = "";
+  ranks.forEach((r, idx) => {
+    const tr = document.createElement("tr");
+
+    const tdMove = document.createElement("td");
+    const up = document.createElement("button");
+    up.className = "btn-icon"; up.innerHTML = "▲"; up.title = "上へ";
+    up.style.opacity = (idx === 0) ? "0.3" : "1";
+    up.addEventListener("click", () => moveRank(idx, -1));
+    const down = document.createElement("button");
+    down.className = "btn-icon"; down.innerHTML = "▼"; down.title = "下へ";
+    down.style.opacity = (idx === ranks.length-1) ? "0.3" : "1";
+    down.addEventListener("click", () => moveRank(idx, 1));
+    tdMove.appendChild(up); tdMove.appendChild(down); tr.appendChild(tdMove);
+
+    const tdName = document.createElement("td");
+    const nameI = document.createElement("input");
+    nameI.value = r.name; nameI.placeholder = "段の名前";
+    nameI.addEventListener("input", () => { r.name = nameI.value; saveRanks(); renderRows(); renderChart(); });
+    tdName.appendChild(nameI); tr.appendChild(tdName);
+
+    const tdKw = document.createElement("td");
+    const kwI = document.createElement("input");
+    kwI.value = (r.keywords || []).join("、");
+    kwI.placeholder = "例：課長、リーダー、係長";
+    kwI.addEventListener("input", () => { r.keywords = kwI.value.split(/[,、，]/).map(s => s.trim()).filter(Boolean); saveRanks(); renderChart(); });
+    tdKw.appendChild(kwI); tr.appendChild(tdKw);
+
+    const tdDel = document.createElement("td");
+    tdDel.className = "col-del";
+    const del = document.createElement("button");
+    del.className = "btn-icon"; del.innerHTML = "✕"; del.title = "この段を削除";
+    del.addEventListener("click", () => removeRank(idx));
+    tdDel.appendChild(del); tr.appendChild(tdDel);
+
+    tbody.appendChild(tr);
+  });
 }
-function levelOf(n){ return (n.level != null && n.level !== "") ? Number(n.level) : roleLevel(n.title); }
-function levelName(L){ return LEVEL_NAMES[L] || ("第" + L + "段"); }
+function moveRank(idx, dir){
+  const j = idx + dir;
+  if(j < 0 || j >= ranks.length) return;
+  const tmp = ranks[idx]; ranks[idx] = ranks[j]; ranks[j] = tmp;
+  saveRanks(); renderRanks(); renderRows(); renderChart();
+}
+function removeRank(idx){
+  if(ranks.length <= 1){ alert("段は最低1つ必要です。"); return; }
+  const removed = ranks[idx];
+  ranks.splice(idx, 1);
+  people.forEach(p => { if(p.rankId === removed.id) p.rankId = null; });
+  saveRanks(); save(); renderRanks(); renderRows(); renderChart();
+}
+function addRank(){
+  ranks.push({id: rankUid++, name: "新しい段", keywords: []});
+  saveRanks(); renderRanks(); renderRows(); renderChart();
+}
+function resetRanks(){
+  if(!confirm("段の体系を初期設定（役員／部長／課長／担当）に戻します。各メンバーの手動指定した段は自動に戻ります。よろしいですか？")) return;
+  rankUid = 1; ranks = defaultRanks();
+  people.forEach(p => p.rankId = null);
+  saveRanks(); save(); renderRanks(); renderRows(); renderChart();
+}
+
+/* ---------- 表示モード ---------- */
+const MODE_KEY = "orgchart.mode.v1";
+let mode = "report";
 function loadMode(){ try{ const m = localStorage.getItem(MODE_KEY); if(m === "role" || m === "report") mode = m; }catch(e){} }
 function setMode(m){ mode = m; try{ localStorage.setItem(MODE_KEY, m); }catch(e){} updateModeButtons(); renderChart(); }
 function updateModeButtons(){
   const r = $("modeReportBtn"), o = $("modeRoleBtn");
   if(r) r.classList.toggle("active", mode === "report");
   if(o) o.classList.toggle("active", mode === "role");
+}
+
+/* ---------- 段（役職の格）の体系：会社ごとにフル設定可 ---------- */
+const RANKS_KEY = "orgchart.ranks.v1";
+const DEFAULT_RANKS = [
+  {name:"役員", keywords:["代表","社長","会長","役員","取締役","CEO","COO","CTO","CFO"]},
+  {name:"部長", keywords:["本部長","部長","次長"]},
+  {name:"課長", keywords:["課長","リーダー","係長","マネージャー","マネージャ","室長","主任"]},
+  {name:"担当", keywords:["担当","メンバー","スタッフ","エンジニア","アシスタント"]}
+];
+let ranks = [];
+let rankUid = 1;
+function defaultRanks(){ return DEFAULT_RANKS.map(r => ({id: rankUid++, name:r.name, keywords:r.keywords.slice()})); }
+function saveRanks(){ try{ localStorage.setItem(RANKS_KEY, JSON.stringify(ranks)); }catch(e){} }
+function loadRanks(){
+  try{
+    const raw = localStorage.getItem(RANKS_KEY);
+    if(raw){ const arr = JSON.parse(raw); if(Array.isArray(arr) && arr.length){ ranks = arr; rankUid = ranks.reduce((m,r)=>Math.max(m, r.id||0),0)+1; return; } }
+  }catch(e){}
+  ranks = defaultRanks();
+}
+/* 役職名から段を自動判定（上の段から順にキーワード一致、無ければ最下段） */
+function autoRankIndex(title){
+  title = title || "";
+  for(let i=0;i<ranks.length;i++){
+    if((ranks[i].keywords||[]).some(k => k && title.indexOf(k) !== -1)) return i;
+  }
+  return ranks.length - 1;
+}
+/* そのノードが入る段のindex（手動指定 rankId を優先、無ければ自動判定） */
+function rankIndexOf(n){
+  if(n.rankId != null){
+    const i = ranks.findIndex(r => r.id === n.rankId);
+    if(i >= 0) return i;
+  }
+  return autoRankIndex(n.title);
+}
+function rankName(i){ return (ranks[i] && ranks[i].name) || ("第" + (i+1) + "段"); }
+/* CSVなどの段トークン（段名 or 旧数値）→ rankId */
+function resolveRankId(token){
+  token = (token == null ? "" : String(token)).trim();
+  if(token === "") return null;
+  const byName = ranks.find(r => r.name === token);
+  if(byName) return byName.id;
+  const num = Number(token);
+  if(!isNaN(num) && num >= 1 && num <= ranks.length) return ranks[num-1].id;
+  return null;
 }
 
 /* ---------- 組織図の構築・レイアウト ---------- */
@@ -307,7 +443,7 @@ function layout(roots){
   function assign(n, depth){
     if(seen.has(n.id)) return;   /* 循環ガード */
     seen.add(n.id);
-    const row = (mode === "role") ? Math.max(0, levelOf(n) - 1) : depth;
+    const row = (mode === "role") ? rankIndexOf(n) : depth;
     if(row > maxRow) maxRow = row;
     n.y = row * (NH + VGAP);
     if(n.children.length === 0){ n.x = cursor; cursor += NW + HGAP; }
@@ -342,7 +478,12 @@ function renderChart(){
   }
 
   const dim = layout(roots);
-  const LBL = (mode === "role") ? 58 : 0;
+  let LBL = 0;
+  if(mode === "role"){
+    let maxLen = 0;
+    eachNode(roots, n => { maxLen = Math.max(maxLen, rankName(rankIndexOf(n)).length); });
+    LBL = Math.max(50, maxLen * 13 + 20);
+  }
   const OX = PAD + LBL;
   const W = dim.w + PAD*2 + LBL, H = dim.h + PAD*2;
   chart.setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -354,12 +495,12 @@ function renderChart(){
 
   /* 段ラベル（役職レベル表示のとき、左端に役員/部長/課長…を表示） */
   if(mode === "role"){
-    const levels = new Set();
-    eachNode(roots, n => levels.add(levelOf(n)));
-    [...levels].sort((a,b) => a-b).forEach(L => {
-      const cy = (L-1) * (NH + VGAP) + PAD + NH/2;
+    const idxs = new Set();
+    eachNode(roots, n => idxs.add(rankIndexOf(n)));
+    [...idxs].sort((a,b) => a-b).forEach(i => {
+      const cy = i * (NH + VGAP) + PAD + NH/2;
       const t = svgEl("text",{x: OX - 14, y: cy + 4, "text-anchor":"end", fill:"#9aa0a8", "font-size":12, "font-family":"sans-serif"});
-      t.textContent = levelName(L);
+      t.textContent = rankName(i);
       chart.appendChild(t);
     });
   }
@@ -433,7 +574,11 @@ function csvEscape(v){
 }
 function toCsv(){
   const rows = [["名前","役職","上司","段"]];
-  people.forEach(p => { if((p.name||"").trim() !== "") rows.push([p.name, p.title, mgrNameOf(p), (p.level == null || p.level === "") ? "" : String(p.level)]); });
+  people.forEach(p => {
+    if((p.name||"").trim() === "") return;
+    const seg = (p.rankId == null) ? "" : ((ranks.find(r => r.id === p.rankId) || {}).name || "");
+    rows.push([p.name, p.title, mgrNameOf(p), seg]);
+  });
   return "﻿" + rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
 }
 function download(filename, text, mime){
@@ -444,7 +589,7 @@ function download(filename, text, mime){
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function exportCsv(){ download("組織図データ.csv", toCsv(), "text/csv;charset=utf-8"); }
-function exportJson(){ download("組織図データ.json", JSON.stringify({version:1, people}, null, 2), "application/json"); }
+function exportJson(){ download("組織図データ.json", JSON.stringify({version:2, ranks, people}, null, 2), "application/json"); }
 
 function parseCsv(text){
   if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
@@ -473,12 +618,11 @@ function fromCsv(text){
   for(let r = start; r < rows.length; r++){
     const name = (rows[r][0] || "").trim();
     if(!name) continue;
-    list.push({name, title:(rows[r][1] || "").trim(), mgrName:(rows[r][2] || "").trim(), level:(rows[r][3] || "").trim()});
+    list.push({name, title:(rows[r][1] || "").trim(), mgrName:(rows[r][2] || "").trim(), seg:(rows[r][3] || "").trim()});
   }
   const result = []; let id = 1; const byName = {};
   list.forEach(o => {
-    const lv = (o.level === "" || isNaN(Number(o.level))) ? null : Number(o.level);
-    const p = {id: id++, name:o.name, title:o.title, mgrId:null, level:lv};
+    const p = {id: id++, name:o.name, title:o.title, mgrId:null, rankId: resolveRankId(o.seg)};
     result.push(p); if(!byName[o.name]) byName[o.name] = p;
   });
   list.forEach((o, idx) => { if(o.mgrName && byName[o.mgrName] && byName[o.mgrName] !== result[idx]) result[idx].mgrId = byName[o.mgrName].id; });
@@ -492,23 +636,32 @@ function importFile(file){
       let loaded;
       if(/\.json$/i.test(file.name) || text.trim().charAt(0) === "{"){
         const obj = JSON.parse(text);
+        if(obj && Array.isArray(obj.ranks) && obj.ranks.length){
+          ranks = obj.ranks.map(r => ({id: Number(r.id), name: String(r.name||""), keywords: Array.isArray(r.keywords) ? r.keywords.slice() : []}));
+          rankUid = ranks.reduce((m,r)=>Math.max(m, r.id||0),0)+1;
+          saveRanks();
+        }
         loaded = Array.isArray(obj) ? obj : obj.people;
         if(!Array.isArray(loaded)) throw new Error("組織図データの形式ではありません");
-        loaded = loaded.map(p => ({id: Number(p.id), name: String(p.name||""), title: String(p.title||""), mgrId: (p.mgrId == null ? null : Number(p.mgrId)), level: (p.level == null || p.level === "") ? null : Number(p.level)}));
+        loaded = loaded.map(p => ({
+          id: Number(p.id), name: String(p.name||""), title: String(p.title||""),
+          mgrId: (p.mgrId == null ? null : Number(p.mgrId)),
+          rankId: (p.rankId != null) ? Number(p.rankId) : ((p.level != null && p.level !== "") ? resolveRankId(String(p.level)) : null)
+        }));
       } else {
         loaded = fromCsv(text);
       }
       if(!loaded.length) throw new Error("読み取れるデータがありませんでした");
       people = loaded;
       uid = people.reduce((m, p) => Math.max(m, p.id || 0), 0) + 1;
-      save(); renderRows(); renderChart();
+      save(); renderRanks(); renderRows(); renderChart();
     }catch(e){ alert("読み込みに失敗しました：" + e.message); }
   };
   reader.readAsText(file);
 }
 
 /* ---------- 起動・イベント ---------- */
-function addPerson(){ people.push({id: uid++, name:"", title:"", mgrId:null, level:null}); save(); renderRows(); renderChart(); }
+function addPerson(){ people.push({id: uid++, name:"", title:"", mgrId:null, rankId:null}); save(); renderRows(); renderChart(); }
 
 $("addBtn").addEventListener("click", addPerson);
 $("sampleBtn").addEventListener("click", () => { loadSample(); save(); renderRows(); renderChart(); });
@@ -530,10 +683,14 @@ $("fileInput").addEventListener("change", (e) => {
 
 $("modeReportBtn").addEventListener("click", () => setMode("report"));
 $("modeRoleBtn").addEventListener("click", () => setMode("role"));
+$("addRankBtn").addEventListener("click", addRank);
+$("resetRankBtn").addEventListener("click", resetRanks);
 
 loadMode();
+loadRanks();
 if(!load()){ loadSample(); save(); }
 updateModeButtons();
+renderRanks();
 renderRows();
 renderChart();
 </script>
