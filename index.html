@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>組織図ジェネレーター</title>
+<style>
+  /* ===== ブランド設定（ここの2色を変えるだけで色味を調整できます） ===== */
+  :root{
+    --accent:#1d9e75;          /* メインカラー（ミエルストーリーの色に差し替え可） */
+    --accent-weak:#e1f5ee;     /* メインカラーの淡色 */
+    --ink:#1f2330;
+    --muted:#6b7280;
+    --line:#e3e6ea;
+    --bg:#f6f7f9;
+    --card:#ffffff;
+    --danger:#c0392b;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    font-family:"Helvetica Neue",Arial,"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;
+    color:var(--ink); background:var(--bg); line-height:1.6;
+  }
+  header{
+    background:var(--card); border-bottom:1px solid var(--line);
+    padding:14px 20px; display:flex; align-items:center; gap:12px;
+  }
+  .logo{
+    width:34px; height:34px; border-radius:8px; background:var(--accent);
+    color:#fff; display:flex; align-items:center; justify-content:center;
+    font-weight:700; font-size:18px; flex:0 0 auto;
+  }
+  header h1{font-size:17px; margin:0; font-weight:600;}
+  header p{font-size:12px; margin:0; color:var(--muted);}
+  .wrap{max-width:1100px; margin:0 auto; padding:18px 20px 60px;}
+  .panel{
+    background:var(--card); border:1px solid var(--line); border-radius:12px;
+    padding:16px 18px; margin-bottom:18px;
+  }
+  .panel h2{font-size:14px; margin:0 0 12px; font-weight:600; display:flex; align-items:center; gap:8px;}
+  .panel h2 .num{
+    width:20px; height:20px; border-radius:50%; background:var(--accent-weak);
+    color:var(--accent); font-size:12px; display:flex; align-items:center; justify-content:center; font-weight:700;
+  }
+  table.input{width:100%; border-collapse:collapse;}
+  table.input th{
+    text-align:left; font-size:12px; color:var(--muted); font-weight:600;
+    padding:6px 8px; border-bottom:1px solid var(--line);
+  }
+  table.input td{padding:5px 8px; vertical-align:middle;}
+  table.input input, table.input select{
+    width:100%; padding:7px 9px; border:1px solid var(--line); border-radius:7px;
+    font-size:14px; font-family:inherit; background:#fff; color:var(--ink);
+  }
+  table.input input:focus, table.input select:focus{outline:none; border-color:var(--accent);}
+  .col-handle{width:26px; color:#c2c7cf; text-align:center; cursor:grab; user-select:none;}
+  .col-del{width:34px; text-align:center;}
+  .btn{
+    border:1px solid var(--line); background:#fff; color:var(--ink);
+    padding:8px 14px; border-radius:8px; font-size:13px; cursor:pointer; font-family:inherit;
+  }
+  .btn:hover{background:#f0f2f4;}
+  .btn-primary{background:var(--accent); color:#fff; border-color:var(--accent);}
+  .btn-primary:hover{filter:brightness(0.94);}
+  .btn-icon{border:none; background:none; color:#b0b6bf; cursor:pointer; font-size:16px; padding:4px;}
+  .btn-icon:hover{color:var(--danger);}
+  .toolbar{display:flex; gap:8px; flex-wrap:wrap; margin-top:12px;}
+  .actions{display:flex; gap:8px; flex-wrap:wrap;}
+  .note{font-size:12px; color:var(--muted); margin:6px 0 0;}
+  .warn{font-size:12px; color:var(--danger); min-height:18px; margin:8px 0 0;}
+  #chartArea{overflow:auto; background:#fff; border:1px dashed var(--line); border-radius:10px; padding:14px;}
+  svg#chart{display:block; margin:0 auto;}
+  .panel-head{display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;}
+  @media print{
+    header, .panel.editor, .actions, .toolbar{display:none !important;}
+    body{background:#fff;}
+    .panel{border:none; padding:0;}
+    #chartArea{border:none; padding:0;}
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">M</div>
+  <div>
+    <h1>組織図ジェネレーター</h1>
+    <p>名前・役職・上司を入力すると、組織図が自動でできあがります</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <!-- ===== 入力パネル ===== -->
+  <section class="panel editor">
+    <h2><span class="num">1</span>メンバーを入力する</h2>
+    <table class="input">
+      <thead>
+        <tr>
+          <th class="col-handle"></th>
+          <th style="width:30%;">名前</th>
+          <th style="width:30%;">役職</th>
+          <th style="width:34%;">上司</th>
+          <th class="col-del"></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="toolbar">
+      <button class="btn btn-primary" id="addBtn">＋ 人を追加</button>
+      <button class="btn" id="sampleBtn">サンプルを読み込む</button>
+      <button class="btn" id="clearBtn">すべて消す</button>
+    </div>
+    <p class="note">「上司」を選ぶと自動でつながります。一番上の人は上司を「（トップ）」のままにしてください。入力は自動保存されます。</p>
+    <p class="warn" id="warn"></p>
+  </section>
+
+  <!-- ===== 組織図パネル ===== -->
+  <section class="panel">
+    <div class="panel-head">
+      <h2 style="margin:0;"><span class="num">2</span>組織図プレビュー</h2>
+      <div class="actions">
+        <button class="btn" id="pngBtn">画像で保存（PNG）</button>
+        <button class="btn" id="printBtn">印刷 / PDF</button>
+      </div>
+    </div>
+    <div id="chartArea" style="margin-top:12px;">
+      <svg id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+  </section>
+</div>
+
+<script>
+/* ===========================================================
+   組織図ジェネレーター（単独HTML・外部送信なし・オフライン動作）
+   データモデル: people = [{id, name, title, mgrId}]
+   上司は名前ではなく id で結ぶため、同姓同名でも誤接続しません。
+   =========================================================== */
+
+const STORE_KEY = "orgchart.people.v1";
+const SAMPLE = [
+  {name:"山田 太郎", title:"代表取締役", mgr:null},
+  {name:"佐藤 花子", title:"営業部長",   mgr:"山田 太郎"},
+  {name:"鈴木 一郎", title:"開発部長",   mgr:"山田 太郎"},
+  {name:"田中 美咲", title:"管理部長",   mgr:"山田 太郎"},
+  {name:"高橋 健",   title:"営業課長",   mgr:"佐藤 花子"},
+  {name:"渡辺 優",   title:"営業担当",   mgr:"高橋 健"},
+  {name:"伊藤 聡",   title:"エンジニア", mgr:"鈴木 一郎"},
+  {name:"中村 彩",   title:"エンジニア", mgr:"鈴木 一郎"},
+  {name:"小林 大",   title:"経理",       mgr:"田中 美咲"},
+];
+
+let people = [];
+let uid = 1;
+const $ = (id) => document.getElementById(id);
+
+/* ---------- 永続化 ---------- */
+function save(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(people)); }catch(e){} }
+function load(){
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if(raw){ people = JSON.parse(raw); uid = people.reduce((m,p)=>Math.max(m,p.id),0)+1; return true; }
+  }catch(e){}
+  return false;
+}
+function loadSample(){
+  people = [];
+  const byName = {};
+  SAMPLE.forEach(s => { const p = {id: uid++, name:s.name, title:s.title, mgrId:null}; byName[s.name]=p; people.push(p); });
+  SAMPLE.forEach(s => { if(s.mgr) byName[s.name].mgrId = byName[s.mgr].id; });
+}
+
+/* ---------- 入力テーブル描画 ---------- */
+function renderRows(){
+  const tbody = $("rows");
+  tbody.innerHTML = "";
+  people.forEach((p) => {
+    const tr = document.createElement("tr");
+
+    const tdH = document.createElement("td");
+    tdH.className = "col-handle"; tdH.textContent = "⋮⋮";
+    tr.appendChild(tdH);
+
+    const tdName = document.createElement("td");
+    const nameI = document.createElement("input");
+    nameI.value = p.name; nameI.placeholder = "氏名";
+    nameI.addEventListener("input", () => { p.name = nameI.value; save(); refreshSelects(); renderChart(); });
+    tdName.appendChild(nameI); tr.appendChild(tdName);
+
+    const tdTitle = document.createElement("td");
+    const titleI = document.createElement("input");
+    titleI.value = p.title; titleI.placeholder = "役職・部署";
+    titleI.addEventListener("input", () => { p.title = titleI.value; save(); renderChart(); });
+    tdTitle.appendChild(titleI); tr.appendChild(tdTitle);
+
+    const tdMgr = document.createElement("td");
+    const sel = document.createElement("select");
+    sel.dataset.pid = p.id;
+    sel.addEventListener("change", () => { p.mgrId = sel.value ? Number(sel.value) : null; save(); renderChart(); });
+    tdMgr.appendChild(sel); tr.appendChild(tdMgr);
+
+    const tdDel = document.createElement("td");
+    tdDel.className = "col-del";
+    const del = document.createElement("button");
+    del.className = "btn-icon"; del.title = "削除"; del.innerHTML = "✕";
+    del.addEventListener("click", () => {
+      people = people.filter(x => x.id !== p.id);
+      people.forEach(x => { if(x.mgrId === p.id) x.mgrId = null; });
+      save(); renderRows(); renderChart();
+    });
+    tdDel.appendChild(del); tr.appendChild(tdDel);
+
+    tbody.appendChild(tr);
+  });
+  refreshSelects();
+}
+
+/* 上司ドロップダウンの中身を最新の名前リストで更新（自分自身は除外） */
+function refreshSelects(){
+  document.querySelectorAll('#rows select').forEach(sel => {
+    const pid = Number(sel.dataset.pid);
+    const cur = people.find(p => p.id === pid);
+    sel.innerHTML = "";
+    const top = document.createElement("option");
+    top.value = ""; top.textContent = "（トップ）";
+    sel.appendChild(top);
+    people.forEach(o => {
+      if(o.id === pid) return;
+      const opt = document.createElement("option");
+      opt.value = o.id;
+      opt.textContent = o.name || "（無名）";
+      sel.appendChild(opt);
+    });
+    sel.value = cur && cur.mgrId ? String(cur.mgrId) : "";
+  });
+}
+
+/* ---------- 組織図の構築・レイアウト ---------- */
+const NW=160, NH=58, HGAP=24, VGAP=48, PAD=16;
+
+function buildForest(){
+  const valid = people.filter(p => (p.name||"").trim() !== "");
+  const map = new Map();
+  valid.forEach(p => map.set(p.id, {...p, children:[]}));
+  const roots = [];
+  map.forEach(node => {
+    if(node.mgrId && map.has(node.mgrId) && node.mgrId !== node.id){
+      map.get(node.mgrId).children.push(node);
+    } else {
+      node.isRoot = true; roots.push(node);
+    }
+  });
+  return {roots, count: valid.length};
+}
+
+function layout(roots){
+  let cursor = 0, maxDepth = 0;
+  const seen = new Set();
+  function assign(n, depth){
+    if(seen.has(n.id)) return;   /* 循環ガード */
+    seen.add(n.id);
+    if(depth > maxDepth) maxDepth = depth;
+    n.y = depth * (NH + VGAP);
+    if(n.children.length === 0){ n.x = cursor; cursor += NW + HGAP; }
+    else{
+      n.children.forEach(c => assign(c, depth+1));
+      n.x = (n.children[0].x + n.children[n.children.length-1].x) / 2;
+    }
+  }
+  roots.forEach(r => assign(r, 0));
+  return { w: Math.max(cursor - HGAP, NW), h: (maxDepth+1) * (NH + VGAP) - VGAP };
+}
+
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs){ const e = document.createElementNS(SVGNS, tag); for(const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function eachNode(roots, fn){ roots.forEach(function r(n){ fn(n); n.children.forEach(r); }); }
+function clip(s, max){ return s.length > max ? s.slice(0, max-1) + "…" : s; }
+
+function renderChart(){
+  const chart = $("chart");
+  while(chart.firstChild) chart.removeChild(chart.firstChild);
+  const {roots, count} = buildForest();
+  $("warn").textContent = roots.length > 1
+    ? "トップ（上司なし）が " + roots.length + " 人います。意図通りか確認してください。" : "";
+
+  if(count === 0){
+    chart.setAttribute("viewBox","0 0 320 80");
+    chart.setAttribute("width","320"); chart.setAttribute("height","80");
+    const t = svgEl("text",{x:160,y:46,"text-anchor":"middle",fill:"#9aa0a8","font-size":14,"font-family":"sans-serif"});
+    t.textContent = "上で名前を入力すると、ここに組織図が表示されます";
+    chart.appendChild(t);
+    return;
+  }
+
+  const dim = layout(roots);
+  const W = dim.w + PAD*2, H = dim.h + PAD*2;
+  chart.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  chart.setAttribute("width", W);
+  chart.setAttribute("height", H);
+
+  const bg = svgEl("rect",{x:0,y:0,width:W,height:H,fill:"#ffffff"});
+  chart.appendChild(bg);
+
+  /* つなぎ線 */
+  eachNode(roots, n => {
+    if(n.children.length){
+      const pcx = n.x + NW/2 + PAD, pb = n.y + NH + PAD, midY = n.y + NH + VGAP/2 + PAD;
+      n.children.forEach(c => {
+        const ccx = c.x + NW/2 + PAD;
+        chart.appendChild(svgEl("path",{d:`M ${pcx} ${pb} V ${midY} H ${ccx} V ${c.y+PAD}`,fill:"none",stroke:"#c7ccd3","stroke-width":1.6}));
+      });
+    }
+  });
+
+  /* ノード */
+  eachNode(roots, n => {
+    const x = n.x + PAD, y = n.y + PAD;
+    chart.appendChild(svgEl("rect",{x,y,width:NW,height:NH,rx:9,
+      fill: n.isRoot ? "var(--accent-weak)" : "#ffffff",
+      stroke: n.isRoot ? "#1d9e75" : "#d6dbe1",
+      "stroke-width": n.isRoot ? 2 : 1.2}));
+    const nameY = n.title ? y + 25 : y + 34;
+    const nm = svgEl("text",{x:x+NW/2,y:nameY,"text-anchor":"middle",fill:"#1f2330","font-size":14,"font-weight":"600","font-family":"sans-serif"});
+    nm.textContent = clip(n.name, 12);
+    chart.appendChild(nm);
+    if(n.title){
+      const tt = svgEl("text",{x:x+NW/2,y:y+42,"text-anchor":"middle",fill:"#6b7280","font-size":12,"font-family":"sans-serif"});
+      tt.textContent = clip(n.title, 14);
+      chart.appendChild(tt);
+    }
+  });
+}
+
+/* ---------- PNG書き出し ---------- */
+function exportPng(){
+  const chart = $("chart");
+  const clone = chart.cloneNode(true);
+  /* CSS変数を実色に固定（書き出し時に色が消えないように） */
+  clone.querySelectorAll('[fill="var(--accent-weak)"]').forEach(el => el.setAttribute("fill","#e1f5ee"));
+  const vb = chart.getAttribute("viewBox").split(" ").map(Number);
+  const W = vb[2], H = vb[3], scale = 2;
+  clone.setAttribute("width", W); clone.setAttribute("height", H);
+  const xml = new XMLSerializer().serializeToString(clone);
+  const svg64 = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(xml)));
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = W*scale; canvas.height = H*scale;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0);
+    const a = document.createElement("a");
+    a.download = "組織図.png";
+    a.href = canvas.toDataURL("image/png");
+    a.click();
+  };
+  img.src = svg64;
+}
+
+/* ---------- 起動・イベント ---------- */
+function addPerson(){ people.push({id: uid++, name:"", title:"", mgrId:null}); save(); renderRows(); renderChart(); }
+
+$("addBtn").addEventListener("click", addPerson);
+$("sampleBtn").addEventListener("click", () => { loadSample(); save(); renderRows(); renderChart(); });
+$("clearBtn").addEventListener("click", () => {
+  if(confirm("入力したメンバーをすべて削除します。よろしいですか？")){ people = []; save(); renderRows(); renderChart(); }
+});
+$("pngBtn").addEventListener("click", exportPng);
+$("printBtn").addEventListener("click", () => window.print());
+
+if(!load()){ loadSample(); save(); }
+renderRows();
+renderChart();
+</script>
+</body>
+</html>
